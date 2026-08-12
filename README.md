@@ -62,9 +62,8 @@ El archivo debe contener el nombre de la instalación y su UID.
 Ejemplo:
 
 ```csv
-Nombre instalación,Installation UID
-Instalación Test,01HK7WD4WS7V1MSAZ72K5X74AF
-Otra instalación,01KZR8FF91N25FQ6031SMYRZRC
+Instalación Test,01HOP4S4WS7V1MSAZ72K5X74AF
+Otra instalación,01KZR8FF91N25FQPP2ASMYRZRC
 ```
 
 ---
@@ -120,21 +119,6 @@ salto_consultas/
 
 ---
 
-## Seguridad
-
-**No publiques en GitHub información real o sensible**, incluyendo:
-
-- tokens de SALTO Nebula;
-- API keys;
-- contraseñas;
-- credenciales;
-- datos personales reales de usuarios;
-- CSV obtenidos de instalaciones reales.
-
-Para ejemplos, utiliza datos ficticios.
-
----
-
 ## Uso autorizado
 
 Este software debe utilizarse únicamente con instalaciones para las que el usuario tenga autorización y con credenciales válidas para consultar la API de SALTO Nebula.
@@ -145,8 +129,8 @@ Este software debe utilizarse únicamente con instalaciones para las que el usua
 
 Si quieres utilizar este software o necesitas información sobre su funcionamiento:
 
-**Autor:** `[TU NOMBRE / EMPRESA]`  
-**Email:** `[TU EMAIL]`
+**Autor:** `Ángel Vaquero`  
+**Email:** `angelvaquerolarioja@gmail.com`
 
 ---
 
