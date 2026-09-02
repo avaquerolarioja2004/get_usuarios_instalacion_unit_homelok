@@ -94,6 +94,73 @@ def obtener_usuarios_unit(uid, unit_uid, headers):
     return paginada(f"{BASE_URL}/installations/{uid}/units/{unit_uid}/users", headers, ("users", "data"), f"Usuarios de unit {unit_uid}")
 
 
+def obtener_access_rights_usuario(user_name, headers):
+    """Lista los derechos de acceso (access-rights) asignados a un usuario.
+
+    Usa el 'name' completo del usuario tal cual lo devuelve la API
+    (p.ej. 'installations/X/users/Y' o 'installations/X/units/Z/users/Y'),
+    en vez de reconstruir la ruta asumiendo que siempre cuelga
+    directamente de la instalación. Los usuarios de una unit NO viven en
+    installations/{id}/users/{id}, sino anidados bajo su unit, así que
+    reconstruir la ruta a mano daba 404 para ellos.
+    """
+    return paginada(
+        f"{BASE_URL}/{user_name}/access-rights",
+        headers,
+        ("user_access_rights", "data"),
+        f"Access rights de usuario {user_name}",
+    )
+
+
+def obtener_iam_policies(uid, headers):
+    """Lista todas las políticas IAM de la instalación (member -> roles)."""
+    return paginada(f"{BASE_URL}/installations/{uid}/iam-policies", headers, ("policies", "data"), f"Políticas IAM de {uid}")
+
+
+def obtener_iam_policies_unit(uid, unit_uid, headers):
+    """Lista las políticas IAM propias de una unit (roles asignados solo sobre esa unit)."""
+    return paginada(
+        f"{BASE_URL}/installations/{uid}/units/{unit_uid}/iam-policies",
+        headers,
+        ("policies", "data"),
+        f"Políticas IAM de unit {unit_uid}",
+    )
+
+
+def construir_mapa_roles(policies):
+    """Devuelve {member: [roles]} a partir de la lista de políticas IAM.
+    El 'member' puede venir como email (caso normal) o como resource name
+    del usuario, según la instalación; se guarda tal cual y en minúsculas
+    para poder cruzarlo de las dos formas."""
+    mapa = {}
+    for p in policies:
+        member = p.get("member")
+        if not member:
+            continue
+        mapa.setdefault(member.strip().lower(), []).extend(p.get("roles", []))
+    return mapa
+
+
+def roles_de_usuario(mapa_roles, user):
+    """Busca los roles de un usuario probando primero por email y luego por
+    resource name, ya que el campo 'member' de iam-policies puede venir en
+    cualquiera de los dos formatos según la instalación."""
+    email = (user.get("email") or "").strip().lower()
+    name = (user.get("name") or "").strip().lower()
+    roles = mapa_roles.get(email) or mapa_roles.get(name) or []
+    return roles
+
+
+def resumir_access_rights(access_rights):
+    """Convierte la lista de user_access_rights en un texto legible 'A; B; C'."""
+    nombres = []
+    for ar in access_rights:
+        nombre = ar.get("display_name") or extraer_uid(ar.get("access_right", "")) or extraer_uid(ar.get("name", ""))
+        if nombre:
+            nombres.append(nombre)
+    return "; ".join(nombres)
+
+
 def guardar_csv(filas, ruta: Path):
     ruta.parent.mkdir(parents=True, exist_ok=True)
     if not filas:
@@ -132,12 +199,38 @@ def ejecutar_consulta(modo: str, csv_instalaciones, token: str, carpeta_salida, 
     for i, (nombre, uid) in enumerate(instalaciones, 1):
         log(f"[{i}/{len(instalaciones)}] {nombre} ({uid})", callback)
         try:
+            # Roles IAM de la instalación: se piden una sola vez y se cruzan por usuario
+            try:
+                policies = obtener_iam_policies(uid, headers)
+                roles_por_miembro = construir_mapa_roles(policies)
+            except Exception as exc:
+                log(f"  [AVISO] No se pudieron obtener las políticas IAM: {exc}", callback)
+                roles_por_miembro = {}
+
             if modo == "instalacion":
                 users = obtener_usuarios_instalacion(uid, headers)
+                filas = []
+                for k, user in enumerate(users, 1):
+                    user_name = user.get("name", "")
+                    user_uid = extraer_uid(user_name)
+                    try:
+                        access_rights = obtener_access_rights_usuario(user_name, headers)
+                    except Exception as exc:
+                        log(f"    [AVISO] No se pudieron obtener los access rights de {user.get('display_name', user_uid)}: {exc}", callback)
+                        access_rights = []
+                    row = flatten_dict(user)
+                    row["user_uid"] = user_uid
+                    row.pop("name", None)
+                    row["roles"] = "; ".join(roles_de_usuario(roles_por_miembro, user)) or "Usuario"
+                    row["access_rights"] = resumir_access_rights(access_rights) or "(sin access rights)"
+                    filas.append(row)
+                    if k % 25 == 0:
+                        log(f"    ... {k}/{len(users)} usuarios procesados", callback)
+                    time.sleep(PAUSA_ENTRE_LLAMADAS)
                 ruta = salida / f"{nombre_fichero_valido(nombre)}.csv"
-                guardar_csv(users, ruta)
-                total_users += len(users)
-                log(f"  -> {len(users)} usuarios guardados en {ruta.name}", callback)
+                guardar_csv(filas, ruta)
+                total_users += len(filas)
+                log(f"  -> {len(filas)} usuarios guardados en {ruta.name}", callback)
             else:
                 units = obtener_units(uid, headers)
                 total_units += len(units)
@@ -150,17 +243,39 @@ def ejecutar_consulta(modo: str, csv_instalaciones, token: str, carpeta_salida, 
                         continue
                     nombre_unit = unit.get("display_name", unit_uid)
                     log(f"    [{j}/{len(units)}] Unit '{nombre_unit}' ({unit_uid})", callback)
+                    try:
+                        policies_unit = obtener_iam_policies_unit(uid, unit_uid, headers)
+                        roles_unit_por_miembro = construir_mapa_roles(policies_unit)
+                    except Exception as exc:
+                        log(f"      [AVISO] No se pudieron obtener las políticas IAM de la unit: {exc}", callback)
+                        roles_unit_por_miembro = {}
                     users = obtener_usuarios_unit(uid, unit_uid, headers)
                     log(f"      -> {len(users)} usuarios", callback)
                     unit_data = flatten_dict({k: v for k, v in unit.items() if k != "name"}, "unit_")
                     unit_data["unit_uid"] = unit_uid
                     for user in users:
+                        user_name = user.get("name", "")
+                        user_uid = extraer_uid(user_name)
+                        try:
+                            access_rights = obtener_access_rights_usuario(user_name, headers)
+                        except Exception as exc:
+                            log(f"      [AVISO] No se pudieron obtener los access rights de {user.get('display_name', user_uid)}: {exc}", callback)
+                            access_rights = []
                         row = flatten_dict(user)
-                        row["user_uid"] = extraer_uid(user.get("name", ""))
+                        row["user_uid"] = user_uid
                         row.pop("name", None)
+                        roles_instalacion = roles_de_usuario(roles_por_miembro, user)
+                        roles_unit = roles_de_usuario(roles_unit_por_miembro, user)
+                        partes_roles = []
+                        if roles_instalacion:
+                            partes_roles.append("instalación: " + ", ".join(roles_instalacion))
+                        if roles_unit:
+                            partes_roles.append("unit: " + ", ".join(roles_unit))
+                        row["roles"] = "; ".join(partes_roles) or "Usuario"
+                        row["access_rights"] = resumir_access_rights(access_rights) or "(sin access rights)"
                         row.update(unit_data)
                         filas.append(row)
-                    time.sleep(PAUSA_ENTRE_LLAMADAS)
+                        time.sleep(PAUSA_ENTRE_LLAMADAS)
                 ruta = salida / f"{nombre_fichero_valido(nombre)}.csv"
                 guardar_csv(filas, ruta)
                 total_users += len(filas)
