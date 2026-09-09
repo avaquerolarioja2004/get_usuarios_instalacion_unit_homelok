@@ -177,6 +177,44 @@ def guardar_csv(filas, ruta: Path):
         writer.writerows(filas)
 
 
+def ejecutar_get_units(instalacion_uid: str, token: str, carpeta_salida, callback=None):
+    """Obtiene únicamente las units de UNA instalación (sin usuarios) y las
+    guarda en un CSV. Pensado para el modo 'Obtener units' de la GUI, donde
+    el usuario escribe directamente el UID de la instalación en vez de
+    aportar un CSV con varias instalaciones."""
+    if not token.strip():
+        raise ValueError("El token es obligatorio")
+    uid = instalacion_uid.strip()
+    if not uid:
+        raise ValueError("El UID de la instalación es obligatorio")
+
+    salida = Path(carpeta_salida)
+    salida.mkdir(parents=True, exist_ok=True)
+    headers = {"Authorization": f"Bearer {token.strip()}", "Accept": "application/json"}
+
+    log("========== OBTENER UNITS DE UNA INSTALACIÓN ==========", callback)
+    log(f"Instalación: {uid}", callback)
+
+    units = obtener_units(uid, headers)
+    log(f"-> {len(units)} units encontradas", callback)
+
+    filas = []
+    for unit in units:
+        unit_uid = extraer_uid(unit.get("name", ""))
+        row = flatten_dict({k: v for k, v in unit.items() if k != "name"})
+        row["unit_uid"] = unit_uid
+        filas.append(row)
+
+    ruta = salida / f"units_{nombre_fichero_valido(uid)}.csv"
+    guardar_csv(filas, ruta)
+
+    log("", callback)
+    log("========== PROCESO TERMINADO ==========", callback)
+    log(f"Units guardadas: {len(filas)}", callback)
+    log(f"Carpeta de salida: {salida}", callback)
+    return {"instalaciones": 1, "units": len(filas), "usuarios": 0, "errores": 0, "salida": str(salida)}
+
+
 def ejecutar_consulta(modo: str, csv_instalaciones, token: str, carpeta_salida, callback=None):
     if modo not in ("instalacion", "units"):
         raise ValueError("Modo de consulta no válido")
